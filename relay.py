@@ -290,12 +290,11 @@ async def _proxy_openai(cfg, data, model_label, is_stream):
         "messages": data.get("messages", []),
         "stream": is_stream,
     }
-    if "temperature" in data:
-        req_body["temperature"] = data["temperature"]
-    if "max_tokens" in data:
-        req_body["max_tokens"] = data["max_tokens"]
-    elif "max_completion_tokens" in data:
-        req_body["max_tokens"] = data["max_completion_tokens"]
+    # Pass through tool-related and other parameters
+    for key in ("tools", "tool_choice", "temperature", "max_tokens", "max_completion_tokens",
+                "top_p", "frequency_penalty", "presence_penalty", "stop", "response_format"):
+        if key in data:
+            req_body[key] = data[key]
 
     headers = {}
     api_key = cfg.get("apiKey", "")
@@ -491,19 +490,21 @@ async def api_chat(request: Request):
 async def _ollama_chat_stream(cfg, data, model_label):
     protocol = cfg.get("protocol", "openai")
     messages = data.get("messages", [])
+    tools = data.get("tools")
+    tool_choice = data.get("tool_choice")
 
     try:
         if protocol == "anthropic":
-            async for chunk in _ollama_stream_anthropic(cfg, messages, model_label):
+            async for chunk in _ollama_stream_anthropic(cfg, messages, model_label, tools=tools):
                 yield chunk
         else:
-            async for chunk in _ollama_stream_openai(cfg, messages, model_label):
+            async for chunk in _ollama_stream_openai(cfg, messages, model_label, tools=tools, tool_choice=tool_choice):
                 yield chunk
     except Exception:
         yield make_ollama_chat_chunk(model_label, "\n[连接中断]", done=True) + "\n"
 
 
-async def _ollama_stream_openai(cfg, messages, model_label):
+async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_choice=None, **kwargs):
     url = cfg["url"].rstrip("/")
     if not url.endswith("/chat/completions"):
         url = url + "/chat/completions"
@@ -513,6 +514,10 @@ async def _ollama_stream_openai(cfg, messages, model_label):
         "messages": messages,
         "stream": True,
     }
+    if tools:
+        req_body["tools"] = tools
+    if tool_choice:
+        req_body["tool_choice"] = tool_choice
 
     headers = {}
     api_key = cfg.get("apiKey", "")
@@ -537,11 +542,8 @@ async def _ollama_stream_openai(cfg, messages, model_label):
                 if parsed is None:
                     continue
                 if parsed.get("done"):
-                    # Yield any accumulated tool calls before finishing
-                    if tool_calls_acc:
-                        final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
-                        yield make_ollama_chat_chunk(model_label, "", done=False, tool_calls=final_tools) + "\n"
-                    yield make_ollama_chat_chunk(model_label, "", done=True) + "\n"
+                    final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
+                    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools) + "\n"
                     return
                 choices = parsed.get("choices", [])
                 if choices:
@@ -567,14 +569,15 @@ async def _ollama_stream_openai(cfg, messages, model_label):
                     if content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
 
+        # Handle any remaining buffer content
         if buffer.strip():
             parsed = parse_sse_line(buffer)
             if parsed and not parsed.get("done"):
                 choices = parsed.get("choices", [])
                 if choices:
-                    msg = choices[0].get("message", choices[0].get("delta", {}))
-                    content = msg.get("content", "")
-                    tc = msg.get("tool_calls", [])
+                    delta = choices[0].get("delta", choices[0].get("message", {}))
+                    content = delta.get("content", "")
+                    tc = delta.get("tool_calls", [])
                     if tc:
                         for call in tc:
                             idx = call.get("index", 0)
@@ -588,16 +591,15 @@ async def _ollama_stream_openai(cfg, messages, model_label):
                                 acc["function"]["name"] = fn["name"]
                             if fn.get("arguments"):
                                 acc["function"]["arguments"] += fn["arguments"]
-                    if tool_calls_acc:
-                        final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
-                        yield make_ollama_chat_chunk(model_label, "", done=False, tool_calls=final_tools) + "\n"
-                    elif content:
+                    if content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
 
-    yield make_ollama_chat_chunk(model_label, "", done=True) + "\n"
+    # Final done chunk — include accumulated tool_calls here (Ollama native behavior)
+    final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
+    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools) + "\n"
 
 
-async def _ollama_stream_anthropic(cfg, messages, model_label):
+async def _ollama_stream_anthropic(cfg, messages, model_label, tools=None):
     url = cfg["url"].rstrip("/")
     if not url.endswith("/messages"):
         url = url + "/messages"
@@ -605,6 +607,17 @@ async def _ollama_stream_anthropic(cfg, messages, model_label):
     openai_data = {"model": cfg.get("model", ""), "messages": messages}
     req_body = openai_to_anthropic(openai_data, cfg)
     req_body["stream"] = True
+    # Convert OpenAI tools format to Anthropic format if present
+    if tools:
+        anthropic_tools = []
+        for t in tools:
+            func = t.get("function", {})
+            anthropic_tools.append({
+                "name": func.get("name", ""),
+                "description": func.get("description", ""),
+                "input_schema": func.get("parameters", {"type": "object"}),
+            })
+        req_body["tools"] = anthropic_tools
 
     headers = {"anthropic-version": "2023-06-01"}
     api_key = cfg.get("apiKey", "")
@@ -649,6 +662,8 @@ async def _ollama_stream_anthropic(cfg, messages, model_label):
 async def _ollama_chat_non_stream(cfg, data, model_label):
     protocol = cfg.get("protocol", "openai")
     messages = data.get("messages", [])
+    tools = data.get("tools")
+    tool_choice = data.get("tool_choice")
 
     try:
         if protocol == "anthropic":
@@ -690,6 +705,10 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
                 "messages": messages,
                 "stream": False,
             }
+            if tools:
+                req_body["tools"] = tools
+            if tool_choice:
+                req_body["tool_choice"] = tool_choice
             headers = {}
             api_key = cfg.get("apiKey", "")
             if api_key:
