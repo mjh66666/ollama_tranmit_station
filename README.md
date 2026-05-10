@@ -20,6 +20,8 @@
 - **多协议支持** — OpenAI 兼容 + Anthropic 兼容
 - **安全加固** — 密码 SHA-256 哈希存储、登录限流、API Key 脱敏、输入校验
 - **VS Code 兼容** — CORS 中间件、`/api/embeddings`、`/api/ps` 等端点
+- **Tool Calls 支持** — 透传 `tools`/`tool_choice` 参数，流式累积并返回完整 tool_calls
+- **多模态支持** — 自动将 Ollama `images` 格式转为 OpenAI `image_url` 格式
 - **现代管理界面** — Vue 3 SPA、状态面板、快速连接配置生成
 
 ## 环境要求
@@ -81,7 +83,7 @@ python start.py
 
 ### 3. 在 VS Code 中使用
 
-**Copilot：**
+**Copilot（Ollama 格式）：**
 ```json
 {
   "github.copilot.advanced": {
@@ -89,6 +91,24 @@ python start.py
   }
 }
 ```
+
+**Copilot（OpenAI 格式，支持自定义模型选择）：**
+```json
+{
+  "github.copilot.chat.experimental.endpoint": "http://服务器IP:11434/v1",
+  "github.copilot.chat.experimental.customModels": [
+    {
+      "id": "mimo-v2.5-pro",
+      "name": "MiMo v2.5 Pro",
+      "endpoint": "http://服务器IP:11434/v1",
+      "apiKey": "any",
+      "model": "mimo-v2.5-pro"
+    }
+  ]
+}
+```
+
+> **注意**：`experimental.*` 设置可能随 VS Code / Copilot 版本变化。将 `服务器IP` 替换为实际地址。
 
 **Continue：**
 ```json
@@ -98,6 +118,15 @@ python start.py
   "continue.ollama.baseUrl": "http://服务器IP:11434"
 }
 ```
+
+### 关于视觉（图片）功能
+
+中转站已实现 Ollama → OpenAI 图片格式自动转换（`images[]` → `image_url`），但 **VS Code Copilot 的 Ollama 集成不支持传递图片数据**，这是 Copilot 本身的限制。
+
+如需使用视觉功能，推荐：
+- **Continue 扩展** — 原生支持 OpenAI 兼容 API 的多模态请求
+- **Copilot OpenAI 端点** — 使用上述 `experimental.endpoint` 配置，走 OpenAI 格式
+- **直接 API 调用** — `curl` 或 Python 脚本调用 `/v1/chat/completions`
 
 ## 验证
 

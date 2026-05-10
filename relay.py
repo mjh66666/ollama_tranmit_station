@@ -30,6 +30,27 @@ async def get_client():
     return _http_client
 
 
+def convert_ollama_messages(messages):
+    """Convert Ollama messages (with images[]) to OpenAI multimodal format."""
+    converted = []
+    for msg in messages:
+        images = msg.get("images")
+        if not images:
+            converted.append(msg)
+            continue
+        content = msg.get("content", "")
+        parts = []
+        if content:
+            parts.append({"type": "text", "text": content})
+        for img in images:
+            if img.startswith("data:"):
+                parts.append({"type": "image_url", "image_url": {"url": img}})
+            else:
+                parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
+        converted.append({"role": msg["role"], "content": parts})
+    return converted
+
+
 def load_configs():
     try:
         with open(CONFIG_FILE, "r", encoding="utf-8") as f:
@@ -162,7 +183,7 @@ async def api_tags():
                 "parent_model": "",
                 "format": "gguf",
                 "family": "llama",
-                "families": ["llama"],
+                "families": ["llama", "clip"],
                 "parameter_size": "7B",
                 "quantization_level": "Q4_0"
             }
@@ -184,12 +205,12 @@ async def api_show(request: Request):
     return {
         "modelfile": "FROM relay\nPARAMETER temperature 0.7\nPARAMETER num_ctx 1048576\n",
         "parameters": "temperature 0.7\nnum_ctx 1048576\n",
-        "template": "{{ .System }}\n{{ .Prompt }}",
+        "template": "{{ if .System }}{{ .System }}\n{{ end }}{{ range .Messages }}{{ if eq .Role \"user\" }}[INST] {{ .Content }} [/INST]{{ else }}{{ .Content }}{{ end }}{{ end }}",
         "details": {
             "parent_model": "",
             "format": "gguf",
             "family": "llama",
-            "families": ["llama"],
+            "families": ["llama", "clip"],
             "parameter_size": "7B",
             "quantization_level": "Q4_0"
         },
@@ -197,6 +218,7 @@ async def api_show(request: Request):
             "general.architecture": "CausalLM",
             "general.name": model_name,
             "llama.context_length": 1048576,
+            "projector_info": "clip",
         },
         "capabilities": caps,
     }
@@ -287,7 +309,7 @@ async def _proxy_openai(cfg, data, model_label, is_stream):
 
     req_body = {
         "model": cfg.get("model", data.get("model", "")),
-        "messages": data.get("messages", []),
+        "messages": convert_ollama_messages(data.get("messages", [])),
         "stream": is_stream,
     }
     # Pass through tool-related and other parameters
@@ -489,7 +511,7 @@ async def api_chat(request: Request):
 
 async def _ollama_chat_stream(cfg, data, model_label):
     protocol = cfg.get("protocol", "openai")
-    messages = data.get("messages", [])
+    messages = convert_ollama_messages(data.get("messages", []))
     tools = data.get("tools")
     tool_choice = data.get("tool_choice")
 
@@ -661,7 +683,7 @@ async def _ollama_stream_anthropic(cfg, messages, model_label, tools=None):
 
 async def _ollama_chat_non_stream(cfg, data, model_label):
     protocol = cfg.get("protocol", "openai")
-    messages = data.get("messages", [])
+    messages = convert_ollama_messages(data.get("messages", []))
     tools = data.get("tools")
     tool_choice = data.get("tool_choice")
 
