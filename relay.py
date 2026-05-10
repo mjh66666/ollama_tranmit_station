@@ -99,12 +99,15 @@ def anthropic_to_openai(upstream: dict, model_name: str) -> dict:
     }
 
 
-def make_ollama_chat_chunk(model_name, content, done=False, usage=None):
+def make_ollama_chat_chunk(model_name, content, done=False, usage=None, tool_calls=None):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    msg = {"role": "assistant", "content": content}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
     chunk = {
         "model": model_name,
         "created_at": now,
-        "message": {"role": "assistant", "content": content},
+        "message": msg,
         "done": done,
     }
     if done:
@@ -525,6 +528,7 @@ async def _ollama_stream_openai(cfg, messages, model_label):
             return
 
         buffer = ""
+        tool_calls_acc = {}  # Accumulate tool call chunks by index
         async for raw_chunk in resp.aiter_bytes():
             buffer += raw_chunk.decode("utf-8", errors="replace")
             while "\n" in buffer:
@@ -533,12 +537,33 @@ async def _ollama_stream_openai(cfg, messages, model_label):
                 if parsed is None:
                     continue
                 if parsed.get("done"):
+                    # Yield any accumulated tool calls before finishing
+                    if tool_calls_acc:
+                        final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+                        yield make_ollama_chat_chunk(model_label, "", done=False, tool_calls=final_tools) + "\n"
                     yield make_ollama_chat_chunk(model_label, "", done=True) + "\n"
                     return
                 choices = parsed.get("choices", [])
                 if choices:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content", "")
+                    # Handle tool_calls chunks
+                    tc = delta.get("tool_calls", [])
+                    if tc:
+                        for call in tc:
+                            idx = call.get("index", 0)
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                            acc = tool_calls_acc[idx]
+                            if call.get("id"):
+                                acc["id"] = call["id"]
+                            if call.get("type"):
+                                acc["type"] = call["type"]
+                            fn = call.get("function", {})
+                            if fn.get("name"):
+                                acc["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                acc["function"]["arguments"] += fn["arguments"]
                     if content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
 
@@ -549,7 +574,24 @@ async def _ollama_stream_openai(cfg, messages, model_label):
                 if choices:
                     msg = choices[0].get("message", choices[0].get("delta", {}))
                     content = msg.get("content", "")
-                    if content:
+                    tc = msg.get("tool_calls", [])
+                    if tc:
+                        for call in tc:
+                            idx = call.get("index", 0)
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+                            acc = tool_calls_acc[idx]
+                            if call.get("id"):
+                                acc["id"] = call["id"]
+                            fn = call.get("function", {})
+                            if fn.get("name"):
+                                acc["function"]["name"] = fn["name"]
+                            if fn.get("arguments"):
+                                acc["function"]["arguments"] += fn["arguments"]
+                    if tool_calls_acc:
+                        final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+                        yield make_ollama_chat_chunk(model_label, "", done=False, tool_calls=final_tools) + "\n"
+                    elif content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
 
     yield make_ollama_chat_chunk(model_label, "", done=True) + "\n"
@@ -664,10 +706,13 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
             if reasoning:
                 content = f"[思考过程]\n{reasoning}\n\n[回答]\n{content}"
             usage = upstream.get("usage", {})
+            resp_msg = {"role": "assistant", "content": content}
+            if message.get("tool_calls"):
+                resp_msg["tool_calls"] = message["tool_calls"]
             return {
                 "model": model_label,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                "message": {"role": "assistant", "content": content},
+                "message": resp_msg,
                 "done": True,
                 "total_duration": 0,
                 "load_duration": 0,
