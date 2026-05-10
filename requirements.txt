@@ -1,0 +1,3 @@
+oai2ollama
+uvicorn
+httpx[http2]

@@ -1,0 +1,1005 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ollama Relay — API 中转站</title>
+<style>
+:root {
+  --bg-deep:    #0a0e14;
+  --bg-panel:   #11161e;
+  --bg-card:    #161c26;
+  --bg-input:   #0f141c;
+  --border:     #1e2938;
+  --border-focus:#00e5ff;
+  --text-primary:#dde4ed;
+  --text-secondary:#7c8aa0;
+  --text-muted: #4a5568;
+  --accent-cyan:#00e5ff;
+  --accent-amber:#ffb800;
+  --accent-green:#00e676;
+  --accent-red: #ff3d4f;
+  --accent-purple:#b388ff;
+  --radius: 6px;
+  --radius-lg: 10px;
+  --shadow-card: 0 2px 12px rgba(0,0,0,.4);
+  --transition: 160ms cubic-bezier(.4,0,.2,1);
+}
+
+* { margin:0; padding:0; box-sizing:border-box; }
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  background: var(--bg-deep);
+  color: var(--text-primary);
+  min-height:100vh;
+  overflow-x:hidden;
+  background-image:
+    radial-gradient(ellipse at 20% 10%, rgba(0,229,255,.04) 0%, transparent 60%),
+    radial-gradient(ellipse at 85% 90%, rgba(255,184,0,.03) 0%, transparent 60%);
+}
+
+code, .mono {
+  font-family: 'JetBrains Mono','Cascadia Code','Fira Code','Consolas','Courier New',monospace;
+}
+
+/* ===== Login ===== */
+.login-overlay {
+  position:fixed; inset:0; background:var(--bg-deep);
+  display:flex; align-items:center; justify-content:center;
+  z-index:999;
+}
+.login-box {
+  background:var(--bg-panel);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:40px 36px;
+  width:380px;
+  box-shadow:0 8px 40px rgba(0,0,0,.6);
+  text-align:center;
+}
+.login-box .login-logo {
+  font-size:32px; margin-bottom:12px;
+}
+.login-box h1 {
+  font-size:20px; color:var(--text-primary);
+  margin-bottom:4px; font-weight:600;
+}
+.login-box h1 span { color:var(--accent-cyan); }
+.login-box .subtitle {
+  font-size:12px; color:var(--text-muted);
+  margin-bottom:28px;
+}
+.login-box input {
+  width:100%; background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  color:var(--text-primary);
+  font-size:14px;
+  padding:12px 16px; margin-bottom:16px;
+  outline:none; transition:border-color var(--transition);
+}
+.login-box input:focus { border-color:var(--border-focus); }
+.login-box .btn-login {
+  width:100%; padding:12px;
+  background:var(--accent-cyan);
+  color:#0a0e14; border:none;
+  border-radius:var(--radius);
+  font-size:14px; font-weight:600;
+  cursor:pointer; transition:all var(--transition);
+}
+.login-box .btn-login:hover { box-shadow:0 0 24px rgba(0,229,255,.35); }
+.login-box .err { color:var(--accent-red); font-size:12px; margin-top:10px; min-height:18px; }
+
+/* ===== Main Layout ===== */
+.container { max-width:1200px; margin:0 auto; padding:20px 24px 40px; }
+
+header {
+  display:flex; align-items:center; justify-content:space-between;
+  padding-bottom:16px; margin-bottom:20px;
+  border-bottom:1px solid var(--border);
+}
+.logo { display:flex; align-items:center; gap:12px; }
+.logo-icon {
+  width:36px; height:36px; border-radius:8px;
+  background:linear-gradient(135deg, var(--accent-cyan), #00b8d4);
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; font-weight:700; color:#0a0e14;
+}
+.logo h1 { font-size:18px; font-weight:600; }
+.logo h1 span { color:var(--accent-cyan); }
+.header-right { display:flex; align-items:center; gap:14px; }
+.status-pill {
+  display:flex; align-items:center; gap:6px;
+  font-size:12px; color:var(--text-secondary);
+  background:var(--bg-card); border:1px solid var(--border);
+  border-radius:20px; padding:5px 14px;
+}
+.status-dot {
+  width:7px; height:7px; border-radius:50%;
+  background:var(--accent-green);
+  box-shadow:0 0 6px var(--accent-green);
+  animation:pulse-dot 2s infinite;
+}
+@keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.4} }
+.btn-logout {
+  background:transparent; border:1px solid var(--border); color:var(--text-secondary);
+  font-size:12px; padding:6px 14px; border-radius:var(--radius);
+  cursor:pointer; transition:all var(--transition);
+}
+.btn-logout:hover { border-color:var(--accent-red); color:var(--accent-red); }
+
+/* ===== Dashboard Stats ===== */
+.stats-row {
+  display:grid; grid-template-columns:repeat(3, 1fr);
+  gap:14px; margin-bottom:20px;
+}
+.stat-card {
+  background:var(--bg-panel);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:16px 20px;
+  display:flex; align-items:center; gap:14px;
+}
+.stat-icon {
+  width:40px; height:40px; border-radius:8px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px;
+}
+.stat-icon.cyan { background:rgba(0,229,255,.1); }
+.stat-icon.amber { background:rgba(255,184,0,.1); }
+.stat-icon.green { background:rgba(0,230,118,.1); }
+.stat-info {}
+.stat-value { font-size:20px; font-weight:700; color:var(--text-primary); }
+.stat-label { font-size:11px; color:var(--text-muted); margin-top:2px; }
+
+/* ===== Main Grid ===== */
+.main-grid {
+  display:grid;
+  grid-template-columns:1fr 380px;
+  gap:20px; align-items:start;
+}
+
+/* ===== Panels ===== */
+.panel {
+  background:var(--bg-panel);
+  border:1px solid var(--border);
+  border-radius:var(--radius-lg);
+  padding:20px 22px;
+  box-shadow:var(--shadow-card);
+}
+.panel-header {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:16px; padding-bottom:12px;
+  border-bottom:1px solid var(--border);
+}
+.panel-title {
+  font-size:13px; font-weight:600; text-transform:uppercase; letter-spacing:1.5px;
+  color:var(--accent-cyan);
+  display:flex; align-items:center; gap:8px;
+}
+.panel-title::before {
+  content:''; display:inline-block;
+  width:3px; height:12px; background:var(--accent-cyan); border-radius:2px;
+}
+
+/* ===== Wizard ===== */
+.wizard-tabs {
+  display:flex; gap:0; margin-bottom:18px;
+  border:1px solid var(--border); border-radius:var(--radius); overflow:hidden;
+}
+.wizard-tab {
+  flex:1; padding:10px; text-align:center; font-size:12px; font-weight:600;
+  color:var(--text-muted); background:var(--bg-input);
+  cursor:pointer; transition:all var(--transition);
+  border-right:1px solid var(--border);
+}
+.wizard-tab:last-child { border-right:none; }
+.wizard-tab.active {
+  color:var(--accent-cyan); background:var(--bg-card);
+  box-shadow:inset 0 -2px 0 var(--accent-cyan);
+}
+.wizard-tab.completed { color:var(--accent-green); }
+
+/* ===== Platform+Protocol Grid ===== */
+.combo-grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(200px, 1fr));
+  gap:10px; margin-bottom:16px;
+}
+.combo-card {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:14px; cursor:pointer;
+  transition:all var(--transition);
+  display:flex; align-items:center; gap:12px;
+}
+.combo-card:hover { border-color:#334155; transform:translateY(-1px); }
+.combo-card.selected { border-color:var(--accent-cyan); background:#111d2b; }
+.combo-card .combo-icon {
+  width:36px; height:36px; border-radius:6px;
+  display:flex; align-items:center; justify-content:center;
+  font-size:18px; background:var(--bg-input);
+  flex-shrink:0;
+}
+.combo-card .combo-info {}
+.combo-card .combo-name { font-size:13px; font-weight:600; }
+.combo-card .combo-proto { font-size:10px; color:var(--text-muted); margin-top:2px; }
+
+/* ===== Forms ===== */
+.form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+.form-row.single { grid-template-columns:1fr; }
+.form-group { display:flex; flex-direction:column; gap:5px; }
+.form-group label {
+  font-size:11px; text-transform:uppercase; letter-spacing:1px;
+  color:var(--text-secondary); font-weight:600;
+}
+.form-group input, .form-group select {
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  color:var(--text-primary);
+  font-size:13px; padding:10px 12px;
+  transition:border-color var(--transition);
+  outline:none;
+}
+.form-group input:focus, .form-group select:focus {
+  border-color:var(--border-focus);
+  box-shadow:0 0 0 2px rgba(0,229,255,.12);
+}
+.form-group input::placeholder { color:var(--text-muted); }
+
+select {
+  -webkit-appearance:none; appearance:none;
+  background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath d='M6 8L1 3h10z' fill='%237c8aa0'/%3E%3C/svg%3E");
+  background-repeat:no-repeat; background-position:right 12px center;
+  padding-right:32px !important; cursor:pointer;
+}
+select option { background:var(--bg-card); color:var(--text-primary); }
+
+/* ===== Buttons ===== */
+.btn {
+  font-size:13px; font-weight:600;
+  padding:10px 20px; border-radius:var(--radius); border:none;
+  cursor:pointer; transition:all var(--transition);
+  display:inline-flex; align-items:center; gap:6px;
+}
+.btn-primary {
+  background:var(--accent-cyan); color:#0a0e14;
+  box-shadow:0 0 20px rgba(0,229,255,.2);
+}
+.btn-primary:hover { box-shadow:0 0 30px rgba(0,229,255,.4); transform:translateY(-1px); }
+.btn-primary:disabled { opacity:.35; cursor:not-allowed; box-shadow:none; transform:none; }
+.btn-outline {
+  background:transparent; border:1px solid var(--border); color:var(--text-secondary);
+}
+.btn-outline:hover { border-color:var(--text-secondary); color:var(--text-primary); }
+.btn-sm { font-size:11px; padding:6px 12px; }
+.btn-group { display:flex; gap:8px; margin-top:14px; }
+
+/* ===== Config Cards ===== */
+.config-list { margin-top:16px; }
+.config-card {
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:14px 16px; margin-bottom:8px;
+  transition:all var(--transition);
+}
+.config-card:hover { border-color:#334155; }
+.config-card.active { border-color:var(--accent-cyan); }
+.config-card-top {
+  display:flex; align-items:center; justify-content:space-between;
+  margin-bottom:8px;
+}
+.config-card-name { font-size:14px; font-weight:600; }
+.config-card-actions { display:flex; gap:4px; }
+.config-card-actions button {
+  background:none; border:none; color:var(--text-muted);
+  cursor:pointer; font-size:14px; padding:4px 8px; border-radius:4px;
+  transition:all var(--transition);
+}
+.config-card-actions button:hover { color:var(--text-primary); background:rgba(255,255,255,.05); }
+.config-card-actions button.del:hover { color:var(--accent-red); }
+
+.config-card-meta {
+  display:flex; gap:8px; flex-wrap:wrap; align-items:center;
+}
+.badge {
+  font-size:10px; font-weight:600; padding:3px 8px;
+  border-radius:4px; text-transform:uppercase; letter-spacing:.5px;
+}
+.badge-platform { background:rgba(0,229,255,.1); color:var(--accent-cyan); }
+.badge-proto { background:rgba(179,136,255,.1); color:var(--accent-purple); }
+.badge-model { background:rgba(255,184,0,.1); color:var(--accent-amber); }
+
+.config-card-key {
+  margin-top:8px; font-size:11px; color:var(--text-muted);
+  display:flex; align-items:center; gap:6px;
+}
+.config-card-key code {
+  font-size:11px; color:var(--text-muted);
+  background:var(--bg-input); padding:2px 6px; border-radius:3px;
+}
+.key-toggle {
+  background:none; border:none; color:var(--text-muted);
+  cursor:pointer; font-size:12px; padding:2px;
+  transition:color var(--transition);
+}
+.key-toggle:hover { color:var(--accent-cyan); }
+
+.empty-state {
+  text-align:center; padding:28px 16px; color:var(--text-muted); font-size:13px;
+}
+.empty-state .icon { font-size:32px; margin-bottom:8px; opacity:.4; }
+
+/* ===== Right Panel: Quick Connect ===== */
+.endpoint-url {
+  display:flex; align-items:center; gap:8px;
+  background:var(--bg-card);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:10px 14px; margin-bottom:12px;
+}
+.endpoint-url .label { font-size:11px; color:var(--text-muted); white-space:nowrap; }
+.endpoint-url code {
+  flex:1; font-size:12px; color:var(--accent-amber);
+  word-break:break-all;
+}
+
+.connect-section { margin-bottom:16px; }
+.connect-section h3 {
+  font-size:11px; text-transform:uppercase; letter-spacing:1px;
+  color:var(--text-muted); margin-bottom:8px; font-weight:600;
+}
+.code-block {
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:12px 14px;
+  font-size:12px; color:var(--accent-green);
+  line-height:1.6;
+  position:relative;
+  overflow-x:auto;
+  white-space:pre; word-break:break-all;
+}
+.code-block .prompt { color:var(--accent-cyan); }
+.code-block .copy-btn {
+  position:absolute; top:8px; right:8px;
+  background:var(--bg-card); border:1px solid var(--border);
+  color:var(--text-muted); font-size:10px; padding:3px 8px;
+  border-radius:4px; cursor:pointer;
+  transition:all var(--transition);
+}
+.code-block .copy-btn:hover { border-color:var(--accent-cyan); color:var(--accent-cyan); }
+
+.endpoint-section { margin-bottom:14px; }
+.endpoint-section h3 {
+  font-size:11px; text-transform:uppercase; letter-spacing:1px;
+  color:var(--text-muted); margin-bottom:6px; font-weight:600;
+}
+.endpoint-row {
+  display:flex; align-items:center; justify-content:space-between;
+  background:var(--bg-input);
+  border:1px solid var(--border);
+  border-radius:var(--radius);
+  padding:8px 12px; margin-bottom:4px;
+  font-size:12px;
+}
+.endpoint-row .method {
+  font-weight:700; min-width:36px;
+  text-transform:uppercase; font-size:10px; letter-spacing:1px;
+}
+.endpoint-row .method.get { color:var(--accent-green); }
+.endpoint-row .method.post { color:var(--accent-amber); }
+.endpoint-row .path {
+  color:var(--text-secondary); font-family:'JetBrains Mono','Cascadia Code','Fira Code','Consolas',monospace;
+  flex:1; margin-left:8px;
+}
+
+/* ===== Toast ===== */
+.toast {
+  position:fixed; top:20px; right:20px;
+  background:var(--bg-card);
+  border:1px solid var(--accent-green);
+  border-radius:var(--radius);
+  padding:12px 20px; font-size:13px; color:var(--accent-green);
+  box-shadow:0 4px 24px rgba(0,0,0,.5);
+  z-index:1000;
+  animation:slide-in .25s ease-out;
+}
+@keyframes slide-in { from{transform:translateX(100%);opacity:0} to{transform:translateX(0);opacity:1} }
+
+/* ===== Loading ===== */
+.loading-overlay {
+  position:fixed; inset:0; background:rgba(10,14,20,.7);
+  display:flex; align-items:center; justify-content:center;
+  z-index:998;
+}
+.spinner {
+  width:32px; height:32px; border:3px solid var(--border);
+  border-top-color:var(--accent-cyan); border-radius:50%;
+  animation:spin .8s linear infinite;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+
+/* ===== Responsive ===== */
+@media (max-width:900px) {
+  .main-grid { grid-template-columns:1fr; }
+  .stats-row { grid-template-columns:1fr; }
+  .form-row { grid-template-columns:1fr; }
+  .combo-grid { grid-template-columns:1fr; }
+}
+@media (max-width:480px) {
+  .container { padding:12px 14px 24px; }
+  header { flex-wrap:wrap; gap:8px; }
+  .header-right { width:100%; justify-content:space-between; }
+}
+</style>
+</head>
+<body>
+
+<div id="app">
+  <!-- Login -->
+  <div v-if="!loggedIn" class="login-overlay">
+    <div class="login-box">
+      <div class="login-logo">&#9889;</div>
+      <h1>OLLAMA <span>RELAY</span></h1>
+      <div class="subtitle">API 中转站管理</div>
+      <input v-model="loginPwd" type="password" placeholder="输入密码"
+             @keyup.enter="doLogin" autofocus />
+      <button class="btn-login" @click="doLogin" :disabled="loginLoading">
+        {{ loginLoading ? '验证中...' : '登 录' }}
+      </button>
+      <div class="err">{{ loginError }}</div>
+    </div>
+  </div>
+
+  <!-- Main App -->
+  <div v-else class="container">
+    <header>
+      <div class="logo">
+        <div class="logo-icon">&#9889;</div>
+        <h1>OLLAMA <span>RELAY</span></h1>
+      </div>
+      <div class="header-right">
+        <div class="status-pill">
+          <span class="status-dot"></span>
+          {{ configs.length }} 个配置
+        </div>
+        <button class="btn-logout" @click="logout">退出</button>
+      </div>
+    </header>
+
+    <!-- Stats -->
+    <div class="stats-row">
+      <div class="stat-card">
+        <div class="stat-icon cyan">&#128202;</div>
+        <div class="stat-info">
+          <div class="stat-value">{{ configs.length }}</div>
+          <div class="stat-label">已配置模型</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon green">&#128268;</div>
+        <div class="stat-info">
+          <div class="stat-value">:11434</div>
+          <div class="stat-label">Ollama 代理端口</div>
+        </div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-icon amber">&#128196;</div>
+        <div class="stat-info">
+          <div class="stat-value">:3456</div>
+          <div class="stat-label">管理面板端口</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="main-grid">
+      <!-- Left: Config Panel -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">模型配置</div>
+          <button class="btn btn-outline btn-sm" @click="resetWizard" v-if="wizardStep > 1 || editingIndex >= 0">
+            + 新建
+          </button>
+        </div>
+
+        <!-- Wizard Tabs -->
+        <div class="wizard-tabs">
+          <div class="wizard-tab" :class="{ active: wizardStep === 1, completed: wizardStep > 1 }"
+               @click="wizardStep = 1">
+            1. 选择平台
+          </div>
+          <div class="wizard-tab" :class="{ active: wizardStep === 2, completed: wizardStep > 2 }"
+               @click="wizardStep = form.platform ? 2 : 1">
+            2. 填写配置
+          </div>
+        </div>
+
+        <!-- Step 1: Platform + Protocol -->
+        <div v-if="wizardStep === 1">
+          <div class="combo-grid">
+            <div v-for="c in combos" :key="c.id"
+                 class="combo-card" :class="{ selected: selectedCombo === c.id }"
+                 @click="selectCombo(c)">
+              <div class="combo-icon">{{ c.icon }}</div>
+              <div class="combo-info">
+                <div class="combo-name">{{ c.platformName }}</div>
+                <div class="combo-proto">{{ c.protoName }}</div>
+              </div>
+            </div>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-primary" @click="wizardStep = 2" :disabled="!selectedCombo">
+              下一步 &rarr;
+            </button>
+          </div>
+        </div>
+
+        <!-- Step 2: Config Details -->
+        <div v-if="wizardStep === 2">
+          <div class="form-row single">
+            <div class="form-group">
+              <label>显示名称</label>
+              <input v-model="form.name" :placeholder="namePlaceholder" />
+            </div>
+          </div>
+          <div class="form-row single">
+            <div class="form-group">
+              <label>API 地址</label>
+              <input v-model="form.url" readonly style="opacity:.6; cursor:not-allowed;" />
+            </div>
+          </div>
+          <div class="form-row">
+            <div class="form-group">
+              <label>API Key</label>
+              <input v-model="form.apiKey" :placeholder="apiKeyPlaceholder" type="password" />
+            </div>
+            <div class="form-group">
+              <label>模型名称</label>
+              <select v-model="form.model" v-if="modelList.length > 0">
+                <option v-for="m in modelList" :key="m" :value="m">{{ m }}</option>
+              </select>
+              <input v-else v-model="form.model" placeholder="输入模型名称" />
+            </div>
+          </div>
+          <div class="btn-group">
+            <button class="btn btn-outline" @click="wizardStep = 1">&larr; 返回</button>
+            <button class="btn btn-primary" @click="saveConfig" :disabled="!canSave || saving">
+              {{ saving ? '保存中...' : (editingIndex >= 0 ? '更新配置' : '添加配置') }}
+            </button>
+            <button class="btn btn-outline" @click="resetWizard" v-if="editingIndex >= 0">取消</button>
+          </div>
+        </div>
+
+        <!-- Config List -->
+        <div class="config-list">
+          <div v-if="configs.length === 0" class="empty-state">
+            <div class="icon">&#128234;</div>
+            还没有配置，添加一个模型吧
+          </div>
+          <div v-for="(cfg, idx) in configs" :key="idx"
+               class="config-card" :class="{ active: selectedIndex === idx }"
+               @click="selectedIndex = idx">
+            <div class="config-card-top">
+              <div class="config-card-name">{{ cfg.name || '未命名' }}</div>
+              <div class="config-card-actions">
+                <button @click.stop="editConfig(idx)" title="编辑">&#9998;</button>
+                <button class="del" @click.stop="deleteConfig(idx)" title="删除">&#10005;</button>
+              </div>
+            </div>
+            <div class="config-card-meta">
+              <span class="badge badge-platform">{{ cfg.platformLabel || cfg.platform }}</span>
+              <span class="badge badge-proto">{{ cfg.protocolLabel || cfg.protocol }}</span>
+              <span class="badge badge-model">{{ cfg.model || '—' }}</span>
+            </div>
+            <div class="config-card-key" v-if="cfg.apiKey">
+              <span>Key:</span>
+              <code>{{ showKeys[idx] ? cfg.apiKey : maskKey(cfg.apiKey) }}</code>
+              <button class="key-toggle" @click.stop="toggleKey(idx)">
+                {{ showKeys[idx] ? '&#128064;' : '&#128065;' }}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: Quick Connect -->
+      <div class="panel">
+        <div class="panel-header">
+          <div class="panel-title">快速连接</div>
+        </div>
+
+        <div class="endpoint-url">
+          <span class="label">BASE URL</span>
+          <code>{{ baseUrl }}</code>
+          <button class="btn btn-outline btn-sm" @click="copyText(baseUrl)">复制</button>
+        </div>
+
+        <div class="connect-section">
+          <h3>环境变量</h3>
+          <div class="code-block">
+            <button class="copy-btn" @click="copyText(envSnippet)">复制</button>
+<span class="prompt">$ </span>{{ envSnippet }}
+          </div>
+        </div>
+
+        <div class="connect-section">
+          <h3>VS Code (Continue)</h3>
+          <div class="code-block">
+            <button class="copy-btn" @click="copyText(vscodeSnippet)">复制</button>{{ vscodeSnippet }}
+          </div>
+        </div>
+
+        <div class="connect-section">
+          <h3>curl 测试</h3>
+          <div class="code-block">
+            <button class="copy-btn" @click="copyText(curlExample)">复制</button>
+<span class="prompt">$ </span>{{ curlExample }}
+          </div>
+        </div>
+
+        <div class="endpoint-section" style="margin-top:16px">
+          <h3>API 端点</h3>
+          <div class="endpoint-row">
+            <span class="method get">GET</span>
+            <span class="path">/api/tags</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method get">GET</span>
+            <span class="path">/api/version</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method post">POST</span>
+            <span class="path">/api/chat</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method post">POST</span>
+            <span class="path">/api/show</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method get">GET</span>
+            <span class="path">/api/ps</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method get">GET</span>
+            <span class="path">/v1/models</span>
+          </div>
+          <div class="endpoint-row">
+            <span class="method post">POST</span>
+            <span class="path">/v1/chat/completions</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div v-if="toastMsg" class="toast">{{ toastMsg }}</div>
+  </div>
+</div>
+
+<script src="vue.global.prod.js"></script>
+<script>
+const { createApp, ref, computed, reactive } = Vue;
+
+const PLATFORMS = [
+  { id: 'deepseek', name: 'DeepSeek', icon: '\u{1F52E}', desc: 'DeepSeek AI' },
+  { id: 'mimo', name: 'MiMo', icon: '\u{1F916}', desc: '小米 MiMo' },
+  { id: 'custom', name: '自定义', icon: '⚙️', desc: '其他平台' },
+];
+
+const PROTOCOLS = {
+  deepseek: [
+    { id: 'openai', name: 'OpenAI 兼容', url: 'https://api.deepseek.com' },
+    { id: 'anthropic', name: 'Anthropic 兼容', url: 'https://api.deepseek.com/anthropic/v1' },
+  ],
+  mimo: [
+    { id: 'openai', name: 'OpenAI 兼容', url: 'https://token-plan-cn.xiaomimimo.com/v1' },
+    { id: 'anthropic', name: 'Anthropic 兼容', url: 'https://token-plan-cn.xiaomimimo.com/anthropic/v1' },
+  ],
+  custom: [
+    { id: 'openai', name: 'OpenAI 兼容', url: '' },
+    { id: 'anthropic', name: 'Anthropic 兼容', url: '' },
+  ],
+};
+
+const MODELS = {
+  deepseek: ['deepseek-v4-pro', 'deepseek-v4-flash', 'deepseek-chat', 'deepseek-reasoner'],
+  mimo: ['mimo-v2.5-pro', 'mimo-v2-omni', 'mimo-v2-mini'],
+  custom: [],
+};
+
+// Build combo list
+const COMBOS = [];
+for (const p of PLATFORMS) {
+  for (const pr of (PROTOCOLS[p.id] || [])) {
+    COMBOS.push({
+      id: p.id + '/' + pr.id,
+      platform: p.id,
+      platformName: p.name,
+      proto: pr.id,
+      protoName: pr.name,
+      icon: p.icon,
+      url: pr.url,
+      models: MODELS[p.id] || [],
+    });
+  }
+}
+
+createApp({
+  setup() {
+    const loggedIn = ref(false);
+    const loginPwd = ref('');
+    const loginError = ref('');
+    const loginLoading = ref(false);
+
+    const configs = ref([]);
+    const wizardStep = ref(1);
+    const selectedCombo = ref('');
+    const form = ref({
+      platform: '', protocol: '', name: '', url: '', apiKey: '', model: '',
+    });
+    const editingIndex = ref(-1);
+    const selectedIndex = ref(-1);
+    const saving = ref(false);
+    const toastMsg = ref('');
+    const showKeys = reactive({});
+    let toastTimer = null;
+
+    const token = ref(localStorage.getItem('relay_token') || '');
+
+    const baseUrl = computed(() => {
+      return window.location.protocol + '//' + window.location.hostname + ':11434';
+    });
+
+    const combos = COMBOS;
+
+    const currentCombo = computed(() => {
+      return COMBOS.find(c => c.id === selectedCombo.value);
+    });
+
+    const modelList = computed(() => {
+      const c = currentCombo.value;
+      if (!c) return [];
+      return c.models;
+    });
+
+    const namePlaceholder = computed(() => {
+      const c = currentCombo.value;
+      if (c && c.models.length > 0) return c.platform.toLowerCase() + '-' + c.models[0];
+      return '例: my-model';
+    });
+
+    const apiKeyPlaceholder = computed(() => {
+      const c = currentCombo.value;
+      if (!c) return 'API Key';
+      if (c.platform === 'MiMo') return 'tp-...';
+      if (c.platform === 'DeepSeek') return 'sk-...';
+      return 'API Key';
+    });
+
+    const canSave = computed(() => {
+      return form.value.platform && form.value.protocol && form.value.url.trim();
+    });
+
+    const selectedModelName = computed(() => {
+      if (selectedIndex.value >= 0 && selectedIndex.value < configs.value.length) {
+        return configs.value[selectedIndex.value].name || configs.value[selectedIndex.value].model || 'model';
+      }
+      return 'model';
+    });
+
+    const envSnippet = computed(() => {
+      return `OLLAMA_HOST=${baseUrl.value}`;
+    });
+
+    const vscodeSnippet = computed(() => {
+      const model = selectedModelName.value;
+      return `// settings.json
+{
+  "continue.modelProvider": "ollama",
+  "continue.model": "${model}",
+  "continue.ollama.baseUrl": "${baseUrl.value}"
+}`;
+    });
+
+    const curlExample = computed(() => {
+      const model = selectedModelName.value;
+      return `curl ${baseUrl.value}/v1/chat/completions \\
+  -H "Content-Type: application/json" \\
+  -d '{"model":"${model}","messages":[{"role":"user","content":"hello"}]}'`;
+    });
+
+    const showToast = (msg) => {
+      toastMsg.value = msg;
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => { toastMsg.value = ''; }, 2000);
+    };
+
+    const maskKey = (key) => {
+      if (!key || key.length <= 8) return key;
+      return key.slice(0, 4) + '****' + key.slice(-4);
+    };
+
+    const toggleKey = (idx) => {
+      showKeys[idx] = !showKeys[idx];
+    };
+
+    const api = async (method, path, body) => {
+      const opts = { method, headers: { 'Content-Type': 'application/json' } };
+      if (token.value) opts.headers['Authorization'] = 'Bearer ' + token.value;
+      if (body) opts.body = JSON.stringify(body);
+      const resp = await fetch(path, opts);
+      return resp.json();
+    };
+
+    const checkAuth = async () => {
+      if (!token.value) return;
+      try {
+        const data = await api('GET', '/api/auth/check');
+        if (data.valid) {
+          loggedIn.value = true;
+          fetchConfigs();
+        } else {
+          localStorage.removeItem('relay_token');
+          token.value = '';
+        }
+      } catch { }
+    };
+
+    const doLogin = async () => {
+      loginError.value = '';
+      loginLoading.value = true;
+      try {
+        const data = await api('POST', '/api/auth/login', { password: loginPwd.value });
+        if (data.token) {
+          token.value = data.token;
+          localStorage.setItem('relay_token', token.value);
+          loggedIn.value = true;
+          loginPwd.value = '';
+          fetchConfigs();
+        } else {
+          loginError.value = data.error || '登录失败';
+        }
+      } catch {
+        loginError.value = '连接服务器失败';
+      }
+      loginLoading.value = false;
+    };
+
+    const logout = () => {
+      localStorage.removeItem('relay_token');
+      token.value = '';
+      loggedIn.value = false;
+      configs.value = [];
+    };
+
+    const fetchConfigs = async () => {
+      try {
+        const data = await api('GET', '/api/configs');
+        configs.value = Array.isArray(data) ? data : [];
+        if (configs.value.length > 0 && selectedIndex.value < 0) {
+          selectedIndex.value = 0;
+        }
+      } catch { showToast('加载配置失败'); }
+    };
+
+    const selectCombo = (c) => {
+      selectedCombo.value = c.id;
+      form.value.platform = c.platform;
+      form.value.protocol = c.proto;
+      form.value.url = c.url;
+      if (c.models.length > 0 && !form.value.model) {
+        form.value.model = c.models[0];
+      }
+    };
+
+    const resetWizard = () => {
+      wizardStep.value = 1;
+      selectedCombo.value = '';
+      form.value = { platform: '', protocol: '', name: '', url: '', apiKey: '', model: '' };
+      editingIndex.value = -1;
+    };
+
+    const saveConfig = async () => {
+      if (!canSave.value || saving.value) return;
+      saving.value = true;
+
+      const platformObj = PLATFORMS.find(p => p.id === form.value.platform);
+      const protoObj = (PROTOCOLS[form.value.platform] || []).find(p => p.id === form.value.protocol);
+
+      const entry = {
+        platform: form.value.platform,
+        platformLabel: platformObj ? platformObj.name : form.value.platform,
+        protocol: form.value.protocol,
+        protocolLabel: protoObj ? protoObj.name : form.value.protocol,
+        name: form.value.name.trim() || form.value.model || 'unnamed',
+        url: form.value.url.trim(),
+        apiKey: form.value.apiKey.trim(),
+        model: form.value.model.trim(),
+      };
+
+      try {
+        if (editingIndex.value >= 0) {
+          await api('PUT', '/api/configs/' + editingIndex.value, entry);
+          configs.value[editingIndex.value] = entry;
+          showToast('配置已更新');
+        } else {
+          const data = await api('POST', '/api/configs', entry);
+          entry.id = data.id;
+          configs.value.push(entry);
+          selectedIndex.value = configs.value.length - 1;
+          showToast('配置已添加');
+        }
+        editingIndex.value = -1;
+        resetWizard();
+      } catch {
+        showToast('保存失败');
+      }
+      saving.value = false;
+    };
+
+    const editConfig = (idx) => {
+      const cfg = configs.value[idx];
+      // Find matching combo
+      const comboId = (cfg.platform || 'custom') + '/' + (cfg.protocol || 'openai');
+      selectedCombo.value = comboId;
+      form.value = {
+        platform: cfg.platform || 'custom',
+        protocol: cfg.protocol || 'openai',
+        name: cfg.name || '',
+        url: cfg.url || '',
+        apiKey: '',
+        model: cfg.model || '',
+      };
+      editingIndex.value = idx;
+      selectedIndex.value = idx;
+      wizardStep.value = 2;
+    };
+
+    const deleteConfig = async (idx) => {
+      if (!confirm('确定删除 "' + (configs.value[idx].name || '未命名') + '" 吗？')) return;
+      try {
+        await api('DELETE', '/api/configs/' + idx);
+        configs.value.splice(idx, 1);
+        if (selectedIndex.value >= configs.value.length) {
+          selectedIndex.value = Math.max(0, configs.value.length - 1);
+        }
+        if (editingIndex.value === idx) resetWizard();
+        showToast('配置已删除');
+      } catch {
+        showToast('删除失败');
+      }
+    };
+
+    const copyText = async (text) => {
+      try {
+        await navigator.clipboard.writeText(text);
+        showToast('已复制到剪贴板');
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = text; ta.style.position='fixed'; ta.style.opacity='0';
+        document.body.appendChild(ta); ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+        showToast('已复制到剪贴板');
+      }
+    };
+
+    checkAuth();
+
+    return {
+      loggedIn, loginPwd, loginError, loginLoading, doLogin, logout,
+      configs, wizardStep, selectedCombo, form, editingIndex, selectedIndex, saving,
+      toastMsg, showKeys, combos, modelList, namePlaceholder, apiKeyPlaceholder,
+      baseUrl, canSave, selectedModelName, envSnippet, vscodeSnippet, curlExample,
+      selectCombo, resetWizard, saveConfig, editConfig, deleteConfig,
+      copyText, maskKey, toggleKey,
+    };
+  }
+}).mount('#app');
+</script>
+</body>
+</html>
