@@ -47,7 +47,11 @@ def convert_ollama_messages(messages):
                 parts.append({"type": "image_url", "image_url": {"url": img}})
             else:
                 parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}})
-        converted.append({"role": msg["role"], "content": parts})
+        new_msg = dict(msg)
+        new_msg["content"] = parts
+        if "images" in new_msg:
+            del new_msg["images"]
+        converted.append(new_msg)
     return converted
 
 
@@ -566,10 +570,7 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
                 parsed = parse_sse_line(line)
                 if parsed is None:
                     continue
-                if parsed.get("done"):
-                    final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
-                    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
-                    return
+                is_done = parsed.get("done", False)
                 choices = parsed.get("choices", [])
                 if choices:
                     delta = choices[0].get("delta", {})
@@ -597,15 +598,22 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
                                 acc["function"]["arguments"] += fn["arguments"]
                     if content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
+                if is_done:
+                    final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
+                    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
+                    return
 
         # Handle any remaining buffer content
         if buffer.strip():
             parsed = parse_sse_line(buffer)
-            if parsed and not parsed.get("done"):
+            if parsed:
                 choices = parsed.get("choices", [])
                 if choices:
                     delta = choices[0].get("delta", choices[0].get("message", {}))
                     content = delta.get("content", "")
+                    rc = delta.get("reasoning_content", "")
+                    if rc:
+                        reasoning_acc += rc
                     tc = delta.get("tool_calls", [])
                     if tc:
                         for call in tc:
@@ -701,6 +709,16 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
                 url = url + "/messages"
             openai_data = {"model": cfg.get("model", ""), "messages": messages}
             req_body = openai_to_anthropic(openai_data, cfg)
+            if tools:
+                anthropic_tools = []
+                for t in tools:
+                    func = t.get("function", {})
+                    anthropic_tools.append({
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object"}),
+                    })
+                req_body["tools"] = anthropic_tools
             headers = {"anthropic-version": "2023-06-01"}
             api_key = cfg.get("apiKey", "")
             if api_key:
