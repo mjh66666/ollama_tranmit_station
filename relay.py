@@ -21,6 +21,36 @@ CONFIG_FILE = Path(__file__).parent / "configs.json"
 # Shared HTTP client — stays alive for the process lifetime
 _http_client = None
 
+# Cache reasoning_content so we can re-inject it if the client drops it
+# Key: (role, content[:80]) -> reasoning_content string
+_reasoning_cache = {}
+
+
+def cache_reasoning(messages, response_msg):
+    """Store reasoning_content from a response for later re-injection."""
+    rc = response_msg.get("reasoning_content", "")
+    if rc and response_msg.get("role") == "assistant":
+        content = response_msg.get("content", "")
+        if content:
+            _reasoning_cache[("assistant", content[:80])] = rc
+
+
+def restore_reasoning(messages):
+    """Re-inject reasoning_content into assistant messages if missing."""
+    restored = []
+    for msg in messages:
+        if msg.get("role") == "assistant" and not msg.get("reasoning_content"):
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                cached = _reasoning_cache.get(("assistant", content[:80]))
+                if cached:
+                    new_msg = dict(msg)
+                    new_msg["reasoning_content"] = cached
+                    restored.append(new_msg)
+                    continue
+        restored.append(msg)
+    return restored
+
 
 async def get_client():
     global _http_client
@@ -315,7 +345,7 @@ async def _proxy_openai(cfg, data, model_label, is_stream):
 
     req_body = {
         "model": cfg.get("model", data.get("model", "")),
-        "messages": convert_ollama_messages(data.get("messages", [])),
+        "messages": restore_reasoning(convert_ollama_messages(data.get("messages", []))),
         "stream": is_stream,
     }
     # Pass through tool-related and other parameters
@@ -399,6 +429,11 @@ async def _proxy_openai(cfg, data, model_label, is_stream):
                 }
             if "model" in result:
                 result["model"] = model_label
+            # Cache reasoning_content for future requests
+            if result.get("choices"):
+                msg = result["choices"][0].get("message", {})
+                if msg.get("reasoning_content"):
+                    cache_reasoning(data.get("messages", []), msg)
             return result
         except Exception as e:
             return {
@@ -539,7 +574,7 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
 
     req_body = {
         "model": cfg.get("model", ""),
-        "messages": messages,
+        "messages": restore_reasoning(messages),
         "stream": True,
     }
     if tools:
@@ -600,6 +635,8 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
                 if is_done:
                     final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
+                    if reasoning_acc:
+                        cache_reasoning(messages, {"role": "assistant", "content": "", "reasoning_content": reasoning_acc})
                     yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
                     return
 
@@ -633,6 +670,8 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
 
     # Final done chunk — include accumulated tool_calls and reasoning_content here
     final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
+    if reasoning_acc:
+        cache_reasoning(messages, {"role": "assistant", "content": "", "reasoning_content": reasoning_acc})
     yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
 
 
@@ -749,7 +788,7 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
                 url = url + "/chat/completions"
             req_body = {
                 "model": cfg.get("model", ""),
-                "messages": messages,
+                "messages": restore_reasoning(messages),
                 "stream": False,
             }
             if tools:
@@ -775,6 +814,7 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
                 resp_msg["reasoning_content"] = reasoning
             if message.get("tool_calls"):
                 resp_msg["tool_calls"] = message["tool_calls"]
+            cache_reasoning(messages, resp_msg)
             return {
                 "model": model_label,
                 "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
