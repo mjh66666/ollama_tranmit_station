@@ -120,11 +120,13 @@ def anthropic_to_openai(upstream: dict, model_name: str) -> dict:
     }
 
 
-def make_ollama_chat_chunk(model_name, content, done=False, usage=None, tool_calls=None):
+def make_ollama_chat_chunk(model_name, content, done=False, usage=None, tool_calls=None, reasoning_content=None):
     now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     msg = {"role": "assistant", "content": content}
     if tool_calls:
         msg["tool_calls"] = tool_calls
+    if reasoning_content:
+        msg["reasoning_content"] = reasoning_content
     chunk = {
         "model": model_name,
         "created_at": now,
@@ -556,6 +558,7 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
 
         buffer = ""
         tool_calls_acc = {}  # Accumulate tool call chunks by index
+        reasoning_acc = ""   # Accumulate reasoning_content chunks
         async for raw_chunk in resp.aiter_bytes():
             buffer += raw_chunk.decode("utf-8", errors="replace")
             while "\n" in buffer:
@@ -565,12 +568,16 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
                     continue
                 if parsed.get("done"):
                     final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
-                    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools) + "\n"
+                    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
                     return
                 choices = parsed.get("choices", [])
                 if choices:
                     delta = choices[0].get("delta", {})
                     content = delta.get("content", "")
+                    # Accumulate reasoning_content (thinking mode)
+                    rc = delta.get("reasoning_content", "")
+                    if rc:
+                        reasoning_acc += rc
                     # Handle tool_calls chunks
                     tc = delta.get("tool_calls", [])
                     if tc:
@@ -616,9 +623,9 @@ async def _ollama_stream_openai(cfg, messages, model_label, tools=None, tool_cho
                     if content:
                         yield make_ollama_chat_chunk(model_label, content, done=False) + "\n"
 
-    # Final done chunk — include accumulated tool_calls here (Ollama native behavior)
+    # Final done chunk — include accumulated tool_calls and reasoning_content here
     final_tools = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())] if tool_calls_acc else None
-    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools) + "\n"
+    yield make_ollama_chat_chunk(model_label, "", done=True, tool_calls=final_tools, reasoning_content=reasoning_acc or None) + "\n"
 
 
 async def _ollama_stream_anthropic(cfg, messages, model_label, tools=None):
@@ -744,10 +751,10 @@ async def _ollama_chat_non_stream(cfg, data, model_label):
             message = choice.get("message", {})
             content = message.get("content", "")
             reasoning = message.get("reasoning_content", "")
-            if reasoning:
-                content = f"[思考过程]\n{reasoning}\n\n[回答]\n{content}"
             usage = upstream.get("usage", {})
             resp_msg = {"role": "assistant", "content": content}
+            if reasoning:
+                resp_msg["reasoning_content"] = reasoning
             if message.get("tool_calls"):
                 resp_msg["tool_calls"] = message["tool_calls"]
             return {
